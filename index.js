@@ -10,7 +10,7 @@ const SEARCH_URLS = [
   'https://www.autotrader.co.uk/car-search?make=Tesla&minimum-seats=6&model=Model%20X&postcode=E1%207DJ&sort=most-recent&year-from=2020',
 ];
 
-const ACTOR_ID = 'epctex/autotradercouk-scraper';
+const ACTOR_ID = 'memo23/autotrader-cheerio';
 const STORE_NAME = 'autotrader-watcher';
 const MAX_ITEMS = 5;
 // =========================================
@@ -44,11 +44,14 @@ for (const url of SEARCH_URLS) {
   const key = searchKey(url);
 
   // 1. Run AutoTrader scraper for THIS URL
-  const run = await client.actor(ACTOR_ID).call({
-    startUrls: [url],
-    maxItems: MAX_ITEMS,
-    proxy: { useApifyProxy: true },
-  });
+const run = await client.actor(ACTOR_ID).call({
+  startUrls: [{ url }],
+  maxItems: MAX_ITEMS,
+  includeListingDetails: false,
+  proxy: {
+    useApifyProxy: true,
+  },
+});
 
   // 2. Read scraped results
   const { items } = await client
