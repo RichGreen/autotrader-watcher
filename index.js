@@ -16,10 +16,10 @@ const SCRAPER_ACTOR_ID = 'memo23/autotrader-cheerio';
 const MAX_ITEMS = 5;
 // =========================================
 
-// Open this actor’s default KV store
+// Open default KV store for this Actor
 const store = await Actor.openKeyValueStore();
 
-// Stable per-search key
+// Generate a stable KV key per search URL
 function searchKey(url) {
   return (
     'SEARCH_' +
@@ -30,14 +30,14 @@ function searchKey(url) {
 let foundAnyNewListings = false;
 const summaryLines = [];
 
-// ================= MAIN =================
+// ================= MAIN LOOP =================
 for (const url of SEARCH_URLS) {
   console.log('\n🔍 Checking search:');
   console.log(url);
 
   const key = searchKey(url);
 
-  // Call the AutoTrader scraper actor
+  // Run the AutoTrader scraper actor
   const run = await Actor.call(SCRAPER_ACTOR_ID, {
     startUrls: [{ url }],
     maxItems: MAX_ITEMS,
@@ -45,30 +45,40 @@ for (const url of SEARCH_URLS) {
     proxy: { useApifyProxy: true },
   });
 
-  // Read dataset
-  const { items } = await Actor.apifyClient
-    .dataset(run.defaultDatasetId)
-    .listItems();
+  // Read dataset items
+  const datasetClient = Actor.apifyClient.dataset(run.defaultDatasetId);
+  const { items } = await datasetClient.listItems();
 
-  // Extract AutoTrader listing IDs
+  // Extract stable AutoTrader listing IDs
   const currentIds = items
     .map(item => item.url)
     .filter(Boolean)
-    .map(u => u.split('/car-details/')[1]?.split('?')[0])
+    .map(url => {
+      const parts = url.split('/car-details/');
+      if (parts.length < 2) return null;
+      return parts[1].split('?')[0];
+    })
     .filter(Boolean)
     .sort();
 
-  const seenIds = (await store.getValue(key)) ?? [];
+  // Load previously seen IDs for this search
+  const seenIds = (await store.getValue(key)) || [];
+
+  // Detect new listings
   const newIds = currentIds.filter(id => !seenIds.includes(id));
 
   if (newIds.length === 0) {
     console.log('No new listings');
-    summaryLines.push(`Search:\n${url}\n\nNo new listings.`);
+    summaryLines.push(
+      `Search:\n${url}\n\nNo new listings.`
+    );
   } else {
     foundAnyNewListings = true;
 
     console.log('NEW LISTINGS FOUND:');
-    newIds.forEach(id => console.log(id));
+    for (const id of newIds) {
+      console.log(id);
+    }
 
     const links = newIds
       .map(id => `https://www.autotrader.co.uk/car-details/${id}`)
@@ -79,16 +89,20 @@ for (const url of SEARCH_URLS) {
     );
   }
 
-  // Persist updated state
-  await store.setValue(
-    key,
-    Array.from(new Set([...seenIds, ...currentIds]))
-  );
+  // Persist updated state for this search
+  const updatedIds = Array.from(new Set([...seenIds, ...currentIds]));
+  await store.setValue(key, updatedIds);
 }
 
-// Final log — Scheduler emails THIS output
+// ================= FINAL OUTPUT =================
 console.log('\n====================');
-console.log(
-  foundAnyNewListings
-    ? '🚗 NEW AutoTrader listings found'
-    : '✅ No new AutoTrader listings'
+
+if (foundAnyNewListings) {
+  console.log('🚗 NEW AutoTrader listings found');
+} else {
+  console.log('✅ No new AutoTrader listings');
+}
+
+console.log(summaryLines.join('\n\n--------------------\n\n'));
+
+await Actor.exit();
