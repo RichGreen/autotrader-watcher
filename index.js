@@ -1,30 +1,25 @@
-import { ApifyClient } from 'apify-client';
+import { Actor } from 'apify';
 import crypto from 'crypto';
+
+await Actor.init();
 
 // ================= CONFIG =================
 const SEARCH_URLS = [
+  // Tesla Model Y
   'https://www.autotrader.co.uk/car-search?make=Tesla&model=Model%20Y&postcode=E1%207DJ&radius=1500&sort=most-recent',
+
+  // Tesla Model X (6+ seats, 2020+)
   'https://www.autotrader.co.uk/car-search?make=Tesla&minimum-seats=6&model=Model%20X&postcode=E1%207DJ&sort=most-recent&year-from=2020',
 ];
 
-const ACTOR_ID = 'memo23/autotrader-cheerio';
-const STORE_NAME = 'autotrader-watcher';
+const SCRAPER_ACTOR_ID = 'memo23/autotrader-cheerio';
 const MAX_ITEMS = 5;
 // =========================================
 
-// Create Apify client
-const client = new ApifyClient({
-  token: process.env.APIFY_TOKEN,
-});
+// Open this actor’s default KV store
+const store = await Actor.openKeyValueStore();
 
-// Ensure KV store exists
-const { id: storeId } = await client
-  .keyValueStores()
-  .getOrCreate(STORE_NAME);
-
-const store = client.keyValueStore(storeId);
-
-// Generate a stable KV-safe key per search URL
+// Stable per-search key
 function searchKey(url) {
   return (
     'SEARCH_' +
@@ -32,18 +27,18 @@ function searchKey(url) {
   );
 }
 
-// ================= MAIN =================
-const emailSections = [];
 let foundAnyNewListings = false;
+const summaryLines = [];
 
+// ================= MAIN =================
 for (const url of SEARCH_URLS) {
   console.log('\n🔍 Checking search:');
   console.log(url);
 
   const key = searchKey(url);
 
-  // Run scraper
-  const run = await client.actor(ACTOR_ID).call({
+  // Call the AutoTrader scraper actor
+  const run = await Actor.call(SCRAPER_ACTOR_ID, {
     startUrls: [{ url }],
     maxItems: MAX_ITEMS,
     includeListingDetails: false,
@@ -51,11 +46,11 @@ for (const url of SEARCH_URLS) {
   });
 
   // Read dataset
-  const { items } = await client
+  const { items } = await Actor.apifyClient
     .dataset(run.defaultDatasetId)
     .listItems();
 
-  // Extract listing IDs
+  // Extract AutoTrader listing IDs
   const currentIds = items
     .map(item => item.url)
     .filter(Boolean)
@@ -63,18 +58,12 @@ for (const url of SEARCH_URLS) {
     .filter(Boolean)
     .sort();
 
-  // Load seen IDs
-  const record = await store.getRecord(key);
-  const seenIds = record?.value ?? [];
-
-  // Diff
+  const seenIds = (await store.getValue(key)) ?? [];
   const newIds = currentIds.filter(id => !seenIds.includes(id));
 
   if (newIds.length === 0) {
     console.log('No new listings');
-    emailSections.push(
-      `Search:\n${url}\n\nNo new listings found.`
-    );
+    summaryLines.push(`Search:\n${url}\n\nNo new listings.`);
   } else {
     foundAnyNewListings = true;
 
@@ -85,32 +74,21 @@ for (const url of SEARCH_URLS) {
       .map(id => `https://www.autotrader.co.uk/car-details/${id}`)
       .join('\n');
 
-    emailSections.push(
+    summaryLines.push(
       `Search:\n${url}\n\nNew listings:\n${links}`
     );
   }
 
-  // Persist state
-  await store.setRecord({
+  // Persist updated state
+  await store.setValue(
     key,
-    value: Array.from(new Set([...seenIds, ...currentIds])),
-  });
+    Array.from(new Set([...seenIds, ...currentIds]))
+  );
 }
 
-// ================= EMAIL =================
-const subject = foundAnyNewListings
-  ? '🚗 NEW AutoTrader listings found'
-  : '✅ AutoTrader check ran – no new listings';
-
-const body = emailSections.join('\n\n--------------------\n\n');
-
-async function sendEmail(subject, body) {
-  await client.user().sendNotification({
-    type: 'EMAIL',
-    subject,
-    message: body,
-  });
-}
-
-
-console.log('📧 Email sent successfully');
+// Final log — Scheduler emails THIS output
+console.log('\n====================');
+console.log(
+  foundAnyNewListings
+    ? '🚗 NEW AutoTrader listings found'
+    : '✅ No new AutoTrader listings'
