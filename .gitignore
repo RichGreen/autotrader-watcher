@@ -1,3 +1,7 @@
 node_modules
 .env
 .DS_Store
+
+# Added by Apify CLI
+storage
+.venv
